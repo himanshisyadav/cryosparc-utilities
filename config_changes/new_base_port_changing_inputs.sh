@@ -8,7 +8,9 @@
 #
 # Author: Himi Yadav
 # Date: July 15, 2025
-# Version: 1.0
+# Version: 1.1
+# Repository: https://github.com/himanshisyadav/cryosparc-utilities
+# Issues: https://github.com/himanshisyadav/cryosparc-utilities/issues
 #
 # Usage: ./new_base_port.sh
 #
@@ -18,10 +20,10 @@
 #   - Appropriate permissions for config file access
 #################################################################
 
-# Define the port range and block size for port search
-START_PORT=39400
-END_PORT=39500
-BLOCK_SIZE=10
+# TODO:
+# - Add error handling for incorrent hostname
+
+CRYOSPARC_PREFIX="${CYAN}[CRYOSPARC]${NC}"
 
 # Function to stop CryoSPARC
 stop_cryosparc() {
@@ -30,8 +32,8 @@ stop_cryosparc() {
     echo "=========================================="
     
     # Stop CryoSPARC using the official command
-    echo "Stopping CryoSPARC..."
-    cryosparcm stop
+    echo -e "$CRYOSPARC_PREFIX Executing: cryosparcm stop"
+    cryosparcm stop 2>&1 | sed "s/^/$(echo -e "$CRYOSPARC_PREFIX") /"
 
     # Function to find and kill processes
     kill_processes() {
@@ -56,7 +58,7 @@ stop_cryosparc() {
     sleep 2
 
     # Kill remaining processes
-    kill_processes "supervisord"
+    kill_processes "supervisor"
     kill_processes "cryosparc"
     kill_processes "mongod"
 
@@ -179,15 +181,97 @@ prompt_input() {
     done
 }
 
+# Function to validate port range
+validate_port_range() {
+    local port=$1
+    local min_port=39100
+    local max_port=39500
+    
+    # Check if port is a number
+    if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+        echo "Error: Port must be a number."
+        return 1
+    fi
+    
+    # Check if port is within allowed range
+    if [ "$port" -lt "$min_port" ] || [ "$port" -gt "$max_port" ]; then
+        echo "Error: Port must be between $min_port and $max_port."
+        return 1
+    fi
+    
+    # Check if port is a multiple of 10 starting from 39100
+    if [ $(( (port - min_port) % 10 )) -ne 0 ]; then
+        echo "Error: Port must be a multiple of 10 starting from $min_port (e.g., 39100, 39110, 39120, etc.)."
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to prompt for port range input
+prompt_port_range() {
+    while true; do
+        echo ""
+        echo "Port Range Configuration:"
+        echo "  - Valid range: 39100-39500"
+        echo "  - Must be multiples of 10 (e.g., 39100, 39110, 39120, etc.)"
+        echo "  - Start port should be less than end port"
+        echo ""
+        
+        # Get start port
+        read -p "Enter start port (39100-39500, multiple of 10): " start_input
+        if validate_port_range "$start_input"; then
+            START_PORT=$start_input
+        else
+            continue
+        fi
+        
+        # Get end port
+        read -p "Enter end port (39100-39500, multiple of 10): " end_input
+        if validate_port_range "$end_input"; then
+            END_PORT=$end_input
+        else
+            continue
+        fi
+        
+        # Validate that start port is less than end port
+        if [ "$START_PORT" -ge "$END_PORT" ]; then
+            echo "Error: Start port ($START_PORT) must be less than end port ($END_PORT)."
+            continue
+        fi
+        
+        # Validate that there's enough range for a block
+        if [ $((END_PORT - START_PORT)) -lt $((BLOCK_SIZE - 1)) ]; then
+            echo "Error: Port range is too small. Need at least $BLOCK_SIZE consecutive ports."
+            continue
+        fi
+        
+        echo "Port range set: $START_PORT - $END_PORT"
+        break
+    done
+}
+
 # Main script execution
-echo "CryoSPARC Manager Script to Update Base Port"
-echo "========================"
+echo "CryoSPARC Manager Script - Base Port Configuration"
+echo "=================================================="
+echo ""
+
+echo "Please log in to assigned host machine and run the script there to avoid configuration issues."
 echo ""
 
 # Step 1: Stop CryoSPARC
 stop_cryosparc
 
-# Step 2: Find free port block
+# Step 2: Set up port scanning parameters
+BLOCK_SIZE=10  # Number of consecutive ports needed for CryoSPARC
+
+# Step 3: Get port range from user
+echo "=========================================="
+echo "PORT RANGE CONFIGURATION"
+echo "=========================================="
+prompt_port_range
+
+# Step 4: Find free port block
 find_free_port_block
 
 if [ $FOUND_FREE_PORT -eq -1 ]; then
@@ -197,9 +281,9 @@ fi
 
 free_port_start=$FOUND_FREE_PORT
 
-# Step 3: Get user inputs
+# Step 5: Get user inputs
 echo "=========================================="
-echo "CONFIGURATION SETUP"
+echo "SYSTEM CONFIGURATION"
 echo "=========================================="
 
 prompt_input "Enter PI CNET ID" pi_cnetid
@@ -211,18 +295,21 @@ echo "Found free port block starting at: $free_port_start"
 read -p "Use this port ($free_port_start) or specify your own? (u/s): " port_choice
 
 if [ "$port_choice" = "s" ] || [ "$port_choice" = "S" ]; then
-    prompt_input "Enter Base Port Number" base_port
-    
-    # Validate port number
-    if ! [[ "$base_port" =~ ^[0-9]+$ ]] || [ "$base_port" -lt 1024 ] || [ "$base_port" -gt 65535 ]; then
-        echo "Error: Base port must be a number between 1024 and 65535"
-        exit 1
-    fi
+    while true; do
+        prompt_input "Enter Base Port Number" base_port
+        
+        # Validate port number
+        if ! [[ "$base_port" =~ ^[0-9]+$ ]] || [ "$base_port" -lt 1024 ] || [ "$base_port" -gt 65535 ]; then
+            echo "Error: Base port must be a number between 1024 and 65535"
+            continue
+        fi
+        break
+    done
 else
     base_port=$free_port_start
 fi
 
-# Step 4: Update configuration
+# Step 6: Update configuration
 update_config "$pi_cnetid" "$user_cnetid" "$base_port"
 
 if [ $? -ne 0 ]; then
@@ -234,33 +321,38 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 5: Apply port changes to CryoSPARC
+# Step 7: Apply port changes to CryoSPARC
 apply_port_changes() {
     echo "=========================================="
     echo "APPLYING PORT CHANGES TO CRYOSPARC"
     echo "=========================================="
     
     echo "Step 1: Starting CryoSPARC database..."
-    cryosparcm start database &
+    echo -e "$CRYOSPARC_PREFIX Executing: cryosparcm start database"
+    cryosparcm start database 2>&1 | sed "s/^/$(echo -e "$CRYOSPARC_PREFIX") /" &
     
     echo "Waiting 30 seconds for database to start..."
     sleep 30
     
-    echo "Step 2: Fixing database port..."
-    cryosparcm fixdbport &
+    echo "Step 2: Fixing database port configuration..."
+    echo -e "$CRYOSPARC_PREFIX Executing: cryosparcm fixdbport"
+    cryosparcm fixdbport 2>&1 | sed "s/^/$(echo -e "$CRYOSPARC_PREFIX") /" &
     
     echo "Step 3: Restarting CryoSPARC..."
-    cryosparcm restart &
+    echo -e "$CRYOSPARC_PREFIX Executing: cryosparcm restart"
+    cryosparcm restart 2>&1 | sed "s/^/$(echo -e "$CRYOSPARC_PREFIX") /" &
     
     echo "Waiting 30 seconds for restart to complete..."
     sleep 30
     
     echo "Step 4: Final stop and start cycle..."
     echo "  Stopping CryoSPARC..."
-    cryosparcm stop
+    echo -e "$CRYOSPARC_PREFIX Executing: cryosparcm stop"
+    cryosparcm stop 2>&1 | sed "s/^/$(echo -e "$CRYOSPARC_PREFIX") /"
     
     echo "  Starting CryoSPARC..."
-    cryosparcm start
+    echo -e "$CRYOSPARC_PREFIX Executing: cryosparcm start"
+    cryosparcm start 2>&1 | sed "s/^/$(echo -e "$CRYOSPARC_PREFIX") /"
     
     echo "Port changes applied successfully!"
     echo ""
@@ -274,4 +366,11 @@ echo "SCRIPT COMPLETED SUCCESSFULLY"
 echo "=========================================="
 echo "CryoSPARC has been stopped, reconfigured, and restarted."
 echo "Base port set to: $base_port"
+echo "Port range used: $START_PORT - $END_PORT"
 echo "CryoSPARC should now be running on the new port configuration."
+echo ""
+echo "Summary of changes:"
+echo "  - Configuration file updated with backup created"
+echo "  - Base port changed to: $base_port"
+echo "  - Database port configuration fixed"
+echo "  - CryoSPARC restarted with new settings"
